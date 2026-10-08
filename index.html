@@ -48,8 +48,10 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;b
 <main id="app">Loading...</main>
 <div id="toast"></div>
 <script type="module">
-import { createClient, createAccount, generatePrivateKey } from "https://esm.sh/genlayer-js@latest";
-import { studionet } from "https://esm.sh/genlayer-js@latest/chains";
+let GLV = "latest";
+try { const q = new URLSearchParams(location.search).get("gl"); if (q && /^[0-9A-Za-z.\-]{1,24}$/.test(q)) { localStorage.setItem("or_gl", q); } GLV = localStorage.getItem("or_gl") || "latest"; } catch (e) {}
+const { createClient, createAccount, generatePrivateKey } = await import("https://esm.sh/genlayer-js@" + GLV);
+const { studionet } = await import("https://esm.sh/genlayer-js@" + GLV + "/chains");
 
 /* Fill these in after deployment so visitors need no setup. */
 const DEFAULTS = { registry: "0x1C7CBc478C9E032F7886921019177d0D4eA9474E", bank: "0x7Ae76fE417Ab74a6A6Bd16DBE6Bd6Ac583454166", engine: "0x0DE3F4505CAcd0aFAec3F6D876aC2E6777Cb582A", pool: "0x69cAf490e82AfaA552275Cd4231684Ccd0926360", escrow: "0x8643515860d2417c60AB9d8B69d436B6a343D9A4" };
@@ -624,7 +626,9 @@ function settingsPage() {
   <div class="mut">The key lives only in this browser. Back it up before you fund it from the Studio faucet.</div>
   <div><button id="sShow" class="sec">Reveal private key</button><button id="sNew" class="sec">New account</button></div>
   <div id="skv" class="mono"></div>
-  <label>Import private key</label><div class="row"><input id="sk" class="grow mono" autocomplete="off"><button id="sImp">Import</button></div></div>`;
+  <label>Import private key</label><div class="row"><input id="sk" class="grow mono" autocomplete="off"><button id="sImp">Import</button></div></div>
+  <div class="card"><h2>Library</h2><div class="mut">genlayer-js version in use: <span class="mono">${esc(GLV)}</span>. Change it only if writes fail with an RPC error.</div>
+  <div class="row"><input id="glv" class="grow mono" value="${esc(GLV)}"><button id="glApply">Apply</button></div></div>`;
   const after = (R) => {
     on(R, "#sSave", async () => {
       const next = {};
@@ -634,6 +638,12 @@ function settingsPage() {
     on(R, "#sNew", async () => {
       if (!confirm("Create a new account? Keep a copy of the current private key first: balances belong to that key.")) throw new Error("Kept the current account");
       setKey(generatePrivateKey()); toast("New account created. Previous keys are kept in this browser's history.", "good");
+    });
+    on(R, "#glApply", async () => {
+      const v = $("#glv", R).value.trim();
+      if (!/^[0-9A-Za-z.\-]{1,24}$/.test(v)) throw new Error("Invalid version");
+      try { localStorage.setItem("or_gl", v); } catch (e) {}
+      location.reload();
     });
     on(R, "#sImp", async () => { const v = $("#sk", R).value.trim(); if (!/^0x[0-9a-fA-F]{64}$/.test(v)) throw new Error("Private key must be 0x + 64 hex characters"); setKey(v); toast("Imported", "good"); });
     on(R, "#sShow", async () => { $("#skv", R).textContent = pk; }, null);
