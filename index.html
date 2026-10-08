@@ -170,10 +170,10 @@ async function write(k, fn, args, value, verify) {
   const rc = await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 240, interval: 5000 });
   const problem = receiptProblem(rc);
   let ok = !problem;
-  if (ok && verify) { try { ok = await verify(); } catch (e) { ok = false; } }
+  if (verify) { try { ok = await verify(); } catch (e) { ok = false; } }
   if (!ok) {
     const extra = value && value > 0n ? "\nAny GEN you sent was credited to your claimable balance." : "";
-    throw new Error(fn + " was not applied" + (problem ? ": " + problem : "") + extra);
+    throw new Error(fn + " was not applied" + (problem ? ": " + problem : "") + extra + "\nTransaction: " + hash);
   }
   toast(fn + " applied", "good");
   return rc;
