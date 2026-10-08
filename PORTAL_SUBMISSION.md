@@ -31,4 +31,4 @@ oracle, dispute-resolution, prediction-market, escrow, optimistic, consensus, ev
 - Architecture and threat model: https://github.com/Mary1270/Openresolver/blob/main/ARCHITECTURE.md
 - CI runs: https://github.com/Mary1270/Openresolver/actions
 - Frontend: https://mary1270.github.io/Openresolver/ (after enabling GitHub Pages)
-- Contract addresses (Studio): bank 0x..., registry 0x..., engine 0x..., pool 0x..., escrow 0x...
+- Contract addresses (Studio): bank 0x7Ae76fE417Ab74a6A6Bd16DBE6Bd6Ac583454166, registry 0x1C7CBc478C9E032F7886921019177d0D4eA9474E, engine 0x0DE3F4505CAcd0aFAec3F6D876aC2E6777Cb582A, pool 0x69cAf490e82AfaA552275Cd4231684Ccd0926360, escrow 0x8643515860d2417c60AB9d8B69d436B6a343D9A4
