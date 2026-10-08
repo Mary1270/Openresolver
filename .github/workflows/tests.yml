@@ -1,1 +1,25 @@
-.
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Unit tests (annotated source contracts)
+        run: python3 -m unittest discover -s tests
+      - name: Deploy files are up to date
+        run: |
+          python3 tools/build_deploy.py
+          git diff --exit-code -- deploy/
+      - name: Unit tests (Studio production files)
+        run: OR_CONTRACT_DIR=deploy/production python3 -m unittest discover -s tests
+      - name: Unit tests (Studio demo files)
+        run: OR_CONTRACT_DIR=deploy/demo python3 -m unittest discover -s tests
+      - name: Mutation check (every planted bug must be caught)
+        run: python3 tools/mutation_check.py
