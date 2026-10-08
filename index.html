@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenResolver</title>
+<style>
+:root{--bg:#f6f7f9;--fg:#14171c;--mut:#5d6675;--card:#fff;--bd:#d9dde4;--ac:#3b5bdb;--ok:#2b8a3e;--bad:#c92a2a;--warn:#b26a00}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--fg:#e8ebf0;--mut:#9aa4b2;--card:#171b22;--bd:#2a313c;--ac:#748ffc;--ok:#69db7c;--bad:#ff8787;--warn:#ffc078}}
+*{box-sizing:border-box}
+html,body{overflow-x:hidden}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--bd);background:var(--card);position:sticky;top:0;z-index:2}
+header b{font-size:17px;margin-right:8px}
+header a{color:var(--fg);text-decoration:none;padding:4px 2px}
+header a.on{color:var(--ac);border-bottom:2px solid var(--ac)}
+main{max-width:980px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;margin:0 0 12px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.grow{flex:1 1 200px;min-width:0}
+h1{font-size:22px;margin:4px 0 12px;overflow-wrap:anywhere}h2{font-size:17px;margin:0 0 8px}
+.mut{color:var(--mut)}.mono{font-family:ui-monospace,monospace;overflow-wrap:anywhere;font-size:13px}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--bd);font-size:12px;margin-right:4px}
+.s-final{color:var(--ok);border-color:var(--ok)}.s-warn{color:var(--warn);border-color:var(--warn)}.s-bad{color:var(--bad);border-color:var(--bad)}
+input,select,textarea,button{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;max-width:100%}
+input.wide,textarea{width:100%}
+textarea{min-height:60px}
+button{cursor:pointer;background:var(--ac);color:#fff;border-color:var(--ac);margin:4px 6px 4px 0}
+button.sec{background:transparent;color:var(--fg);border-color:var(--bd)}
+button:disabled{opacity:.5;cursor:default}
+label{display:block;margin:10px 0 4px;font-weight:600;font-size:13px}
+a{color:var(--ac)}
+a.item{display:block;color:inherit;text-decoration:none}
+table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px}
+.kv div{overflow-wrap:anywhere;min-width:0}
+.kv div:nth-child(odd){color:var(--mut)}
+.note{border-left:4px solid var(--warn)}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;background:var(--bg);padding:8px;border-radius:6px}
+#toast{position:fixed;left:12px;right:12px;bottom:12px;max-width:600px;margin:0 auto;z-index:5}
+#toast div{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ac);border-radius:8px;padding:10px 12px;margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere}
+#toast .err{border-left-color:var(--bad)}#toast .good{border-left-color:var(--ok)}
+@media (max-width:520px){.kv{grid-template-columns:minmax(0,1fr)}.kv div:nth-child(odd){margin-top:6px}}
+</style>
+</head>
+<body>
+<header id="nav"></header>
+<main id="app">Loading...</main>
+<div id="toast"></div>
+<script type="module">
+import { createClient, createAccount, generatePrivateKey } from "https://esm.sh/genlayer-js@latest";
+import { studionet } from "https://esm.sh/genlayer-js@latest/chains";
+
+/* Fill these in after deployment so visitors need no setup. */
+const DEFAULTS = { registry: "", bank: "", engine: "", pool: "", escrow: "" };
+const KEYS = ["registry", "bank", "engine", "pool", "escrow"];
+const ADDR = /^0x[0-9a-fA-F]{40}$/;
+const WEI = 10n ** 18n;
+const $ = (s, r = document) => r.querySelector(s);
+
+let storageOk = true;
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { storageOk = false; return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); if (localStorage.getItem(k) !== v) storageOk = false; } catch (e) { storageOk = false; } }
+
+const esc = (v) => String(v ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
+
+/* ---------------- config ---------------- */
+let saved = { ...DEFAULTS };
+try { Object.assign(saved, JSON.parse(lsGet("or_cfg") || "{}")); } catch (e) {}
+let cfg = { ...saved };
+let fromLink = false;
+{
+  const q = new URLSearchParams(location.search);
+  for (const k of KEYS) {
+    const v = (q.get(k) || "").trim();
+    if (v && ADDR.test(v) && v.toLowerCase() !== String(cfg[k]).toLowerCase()) { cfg[k] = v.toLowerCase(); fromLink = true; }
+  }
+}
+function saveCfg() { saved = { ...cfg }; lsSet("or_cfg", JSON.stringify(saved)); fromLink = false; }
+const configured = () => KEYS.every((k) => ADDR.test(cfg[k] || ""));
+
+/* ---------------- account ---------------- */
+let pk = lsGet("or_pk");
+if (!pk) { pk = generatePrivateKey(); lsSet("or_pk", pk); }
+let account = createAccount(pk);
+let client = createClient({ chain: studionet, account });
+function setKey(k) {
+  let hist = [];
+  try { hist = JSON.parse(lsGet("or_pk_hist") || "[]"); } catch (e) {}
+  if (pk && !hist.includes(pk)) hist.push(pk);
+  lsSet("or_pk_hist", JSON.stringify(hist.slice(-10)));
+  pk = k; lsSet("or_pk", k);
+  account = createAccount(k);
+  client = createClient({ chain: studionet, account });
+}
+const me = () => String(account.address).toLowerCase();
+
+/* ---------------- formatting ---------------- */
+function big(v) { try { return BigInt(v); } catch (e) { return 0n; } }
+function fmtGen(wei) {
+  let w; try { w = BigInt(wei); } catch (e) { return "?"; }
+  const neg = w < 0n; if (neg) w = -w;
+  const whole = w / WEI, frac = (w % WEI).toString().padStart(18, "0").replace(/0+$/, "");
+  return (neg ? "-" : "") + whole + (frac ? "." + frac.slice(0, 6) : "") + " GEN";
+}
+function parseGen(s) {
+  s = String(s).trim();
+  if (!/^\d+(\.\d{1,18})?$/.test(s)) throw new Error("Invalid GEN amount: " + s);
+  const [a, b = ""] = s.split(".");
+  return BigInt(a) * WEI + BigInt(b.padEnd(18, "0"));
+}
+function fmtTime(t) { t = Number(t); return t ? new Date(t * 1000).toLocaleString() : "-"; }
+function fmtDur(s) { s = Number(s); if (s >= 86400) return (s / 86400).toFixed(1).replace(/\.0$/, "") + " d"; if (s >= 3600) return (s / 3600).toFixed(1).replace(/\.0$/, "") + " h"; return Math.round(s / 60) + " min"; }
+function short(a) { a = String(a || ""); return a.length > 12 ? a.slice(0, 8) + "…" + a.slice(-4) : a || "-"; }
+function epoch(v) { const t = Date.parse(v); if (isNaN(t)) throw new Error("Invalid date"); return Math.floor(t / 1000); }
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+/* Views return JSON whose integers may exceed 2^53: keep them as strings. */
+function parseJson(text) {
+  if (typeof text !== "string") return text;
+  let out = "", i = 0, inStr = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (c === "\\") { out += text[i + 1] || ""; i += 2; continue; }
+      if (c === '"') inStr = false;
+      i++; continue;
+    }
+    if (c === '"') { inStr = true; out += c; i++; continue; }
+    if (c === "-" || (c >= "0" && c <= "9")) {
+      let j = i + 1;
+      while (j < text.length && /[0-9.eE+-]/.test(text[j])) j++;
+      const tok = text.slice(i, j);
+      out += /^-?\d{16,}$/.test(tok) ? '"' + tok + '"' : tok;
+      i = j; continue;
+    }
+    out += c; i++;
+  }
+  return JSON.parse(out);
+}
+
+function toast(msg, cls = "") {
+  const d = document.createElement("div"); d.className = cls; d.textContent = msg;
+  $("#toast").appendChild(d); setTimeout(() => d.remove(), cls === "err" ? 14000 : 7000);
+}
+
+/* ---------------- chain ---------------- */
+function need(k) { if (!ADDR.test(cfg[k] || "")) throw new Error("Contract address not set: " + k + " (open Settings)"); return cfg[k]; }
+async function read(k, fn, args = []) { return client.readContract({ address: need(k), functionName: fn, args }); }
+async function readJson(k, fn, args = []) { return parseJson(await read(k, fn, args)); }
+
+function stringify(x) {
+  try { return JSON.stringify(x, (k, v) => (typeof v === "bigint" ? v.toString() : v)); } catch (e) { return ""; }
+}
+function receiptProblem(rc) {
+  const s = stringify(rc);
+  const rej = s.match(/REJECTED:[^"\\]{0,160}/);
+  if (rej) return rej[0];
+  if (/"execution_result"\s*:\s*"ERROR"/.test(s) || /"status"\s*:\s*"(rollback|error)"/i.test(s)) return "the contract raised an error";
+  return "";
+}
+/* Every write is followed by a read-back check, so a call the contract rejected
+   is never shown as a success, whatever shape the receipt has. */
+async function write(k, fn, args, value, verify) {
+  const hash = await client.writeContract({ address: need(k), functionName: fn, args, value: value || 0n });
+  toast("Sent " + fn + "…");
+  const rc = await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 240, interval: 5000 });
+  const problem = receiptProblem(rc);
+  let ok = !problem;
+  if (ok && verify) { try { ok = await verify(); } catch (e) { ok = false; } }
+  if (!ok) {
+    const extra = value && value > 0n ? "\nAny GEN you sent was credited to your claimable balance." : "";
+    throw new Error(fn + " was not applied" + (problem ? ": " + problem : "") + extra);
+  }
+  toast(fn + " applied", "good");
+  return rc;
+}
+async function act(btn, fn, after) {
+  const old = btn.textContent; btn.disabled = true; btn.textContent = "Working…";
+  try { await fn(); if (after) await after(); }
+  catch (e) { toast(String((e && e.message) || e), "err"); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+function on(root, sel, fn, after = () => route()) {
+  root.querySelectorAll(sel).forEach((b) => b.addEventListener("click", () => act(b, () => fn(b), after)));
+}
+
+/* ---------------- ui atoms ---------------- */
+const STATUS_CLS = { FINAL_OPTIMISTIC: "s-final", FINAL_CONSENSUS: "s-final", SETTLED: "s-final", RELEASED: "s-final", SPLIT_PAID: "s-final", CANCELLED: "s-bad", REFUNDED: "s-bad", UNRESOLVED_TIMEOUT: "s-bad", DISPUTED: "s-warn", APPEALED: "s-warn", TIMEOUT_PENDING: "s-warn", EVIDENCE_FROZEN: "s-warn", JUDGED: "s-warn" };
+const tag = (s) => `<span class="tag ${STATUS_CLS[s] || ""}">${esc(s)}</span>`;
+const kv = (rows) => `<div class="kv">${rows.map(([k, v]) => `<div>${esc(k)}</div><div>${v}</div>`).join("")}</div>`;
+const addr = (a) => `<span class="mono">${esc(a || "-")}</span>`;
+const qlink = (id) => `<a href="#/question/${encodeURIComponent(id)}">${esc(id)}</a>`;
+
+const NAV = [["#/", "Explorer"], ["#/create", "Create"], ["#/markets", "Markets"], ["#/escrows", "Escrows"], ["#/resolvers", "Resolvers"], ["#/bank", "Bank"], ["#/settings", "Settings"]];
+function renderNav() {
+  const h = location.hash || "#/";
+  $("#nav").innerHTML = "<b>OpenResolver</b>" + NAV.map(([href, t]) => `<a href="${href}" class="${h === href || (href !== "#/" && h.startsWith(href)) ? "on" : ""}">${t}</a>`).join("") +
+    `<span class="mut mono" style="margin-left:auto">${esc(short(account.address))}</span><button class="sec" id="navRefresh" title="Reload data">↻</button>`;
+  $("#navRefresh").addEventListener("click", () => route());
+}
+function banners() {
+  let out = "";
+  if (fromLink) out += `<div class="card note">Contract addresses come from the link you opened and are used for this visit only. Check them in <a href="#/settings">Settings</a> before sending GEN.</div>`;
+  if (!storageOk) out += `<div class="card note">This browser does not keep local data here (private mode?). Your account key will be lost when the tab closes: back it up in <a href="#/settings">Settings</a>.</div>`;
+  return out;
+}
+
+/* ---------------- router ---------------- */
+const app = $("#app");
+let seq = 0;
+async function route() {
+  const my = ++seq;
+  renderNav();
+  try {
+    const parts = (location.hash || "#/").slice(2).split("/").filter(Boolean).map(decodeURIComponent);
+    const view = await page(parts);
+    if (my !== seq) return;
+    app.innerHTML = banners() + view.html;
+    if (view.after) view.after(app);
+  } catch (e) {
+    if (my !== seq) return;
+    app.innerHTML = banners() + `<div class="card"><h2>Error</h2><div class="mono">${esc((e && e.message) || e)}</div></div>`;
+  }
+}
+async function page(p) {
+  const name = p[0] || "";
+  if (name !== "settings" && !configured()) return setupPage();
+  switch (name) {
+    case "": return explorer();
+    case "question": return questionPage(p[1]);
+    case "create": return createPage();
+    case "markets": return marketsPage();
+    case "market": return marketPage(p[1]);
+    case "escrows": return escrowsPage();
+    case "escrow": return escrowPage(p[1]);
+    case "resolvers": return resolversPage();
+    case "bank": return bankPage();
+    case "settings": return settingsPage();
+    default: return { html: `<div class="card">Page not found.</div>` };
+  }
+}
+function setupPage() {
+  return { html: `<h1>OpenResolver</h1><div class="card"><h2>Not connected yet</h2>
+    <p>This page needs the five deployed contract addresses (registry, bank, engine, pool, escrow).</p>
+    <a href="#/settings">Open Settings</a></div>` };
+}
+
+/* ---------------- explorer ---------------- */
+const PAGE = 20;
+let ex = { q: "", status: "", type: "", items: [], total: 0 };
+async function explorer() {
+  const first = await readJson("registry", "list_questions_page", [0, PAGE]);
+  ex.items = first.items; ex.total = Number(first.total);
+  const statuses = ["OPEN", "PROPOSED", "FINAL_OPTIMISTIC", "DISPUTED", "EVIDENCE_FROZEN", "JUDGED", "APPEALED", "FINAL_CONSENSUS", "TIMEOUT_PENDING", "CANCELLED", "UNRESOLVED_TIMEOUT"];
+  const html = `<h1>Questions</h1><div class="card row">
+    <input id="exq" class="grow" placeholder="Search text or id" value="${esc(ex.q)}">
+    <select id="exs"><option value="">All statuses</option>${statuses.map((s) => `<option ${s === ex.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+    <select id="ext"><option value="">All types</option>${["BINARY", "CATEGORICAL", "BUCKETED_RANGE", "SPLIT"].map((s) => `<option ${s === ex.type ? "selected" : ""}>${s}</option>`).join("")}</select>
+    </div><div id="exlist"></div><div id="exmore"></div>`;
+  const after = (root) => {
+    const draw = () => {
+      const q = ex.q.toLowerCase();
+      const items = ex.items.filter((x) => (!ex.status || x.status === ex.status) && (!ex.type || x.answer_type === ex.type) &&
+        (!q || String(x.question_text).toLowerCase().includes(q) || String(x.id).toLowerCase() === q));
+      $("#exlist", root).innerHTML = items.length ? items.map((x) => `<a class="card item" href="#/question/${encodeURIComponent(x.id)}">
+        <div class="row"><b class="grow">${esc(x.question_text)}</b>${tag(x.status)}</div>
+        <div class="mut">${esc(x.id)} · ${esc(x.answer_type)} · bounty ${fmtGen(x.bounty)}${x.final ? " · answer: <b>" + esc(x.answer) + "</b>" : ""}</div></a>`).join("")
+        : `<div class="card mut">${ex.total ? "No loaded question matches." : "No questions yet. Create the first one."}</div>`;
+      $("#exmore", root).innerHTML = ex.items.length < ex.total ? `<button class="sec" id="bMore">Load more (${ex.items.length}/${ex.total})</button>` : "";
+      const b = $("#bMore", root);
+      if (b) b.addEventListener("click", () => act(b, async () => {
+        const nxt = await readJson("registry", "list_questions_page", [ex.items.length, PAGE]);
+        const seen = new Set(ex.items.map((x) => x.id));
+        ex.items = ex.items.concat(nxt.items.filter((x) => !seen.has(x.id)));
+        ex.total = Number(nxt.total);
+        draw();
+      }));
+    };
+    for (const [id, key] of [["#exq", "q"], ["#exs", "status"], ["#ext", "type"]]) $(id, root).addEventListener("input", (e) => { ex[key] = e.target.value; draw(); });
+    draw();
+  };
+  return { html, after };
+}
+
+/* ---------------- question ---------------- */
+function answerInput(q, id) {
+  if (q.answer_type === "BINARY") return `<select id="${id}"><option>YES</option><option>NO</option></select>`;
+  if (q.answer_type === "CATEGORICAL") return `<select id="${id}">${q.options.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}</select>`;
+  if (q.answer_type === "BUCKETED_RANGE") {
+    const e = q.options.map(String);
+    const label = (i) => (i === 0 ? `< ${e[0]}` : i === e.length ? `≥ ${e[e.length - 1]}` : `${e[i - 1]} – ${e[i]}`);
+    return `<select id="${id}">${Array.from({ length: e.length + 1 }, (_, i) => `<option value="${i}">bucket ${i}: ${esc(label(i))}</option>`).join("")}</select>`;
+  }
+  return `<input id="${id}" class="wide" placeholder="${q.options.length} shares, multiples of 1000, summing to 10000 (e.g. ${q.options.length === 2 ? "5000,5000" : "5000,3000,2000"})">`;
+}
+const urlsFrom = (root, id) => JSON.stringify($(id, root).value.split(/\s+/).map((s) => s.trim()).filter(Boolean));
+const ENGINE_STATES = ["DISPUTED", "TIMEOUT_PENDING", "EVIDENCE_FROZEN", "JUDGED", "APPEALED", "FINAL_CONSENSUS"];
+
+async function questionPage(qid) {
+  const q = await readJson("registry", "get_question", [qid]);
+  const cons = await readJson("registry", "get_constants");
+  const mult = big(await read("bank", "get_bond_multiplier_pct", [me()]));
+  const maxBounty = big(await read("bank", "get_max_bounty", [me()]));
+  let cs = null, snap = null;
+  if (ENGINE_STATES.includes(q.status) || q.path === "ABORTED") {
+    try { cs = await readJson("engine", "get_case", [qid]); } catch (e) { cs = null; }
+    if (cs) { try { snap = await readJson("engine", "get_snapshot", [qid]); } catch (e) {} }
+  }
+  const now = nowSec();
+  const S = q.status;
+  const proposerBond = big(cons.proposer_bond) * mult / 100n;
+  const disputeBond = (() => { const a = big(cons.dispute_bond) * mult / 100n, b = big(q.proposer_bond); return a > b ? a : b; })();
+  const appealBond = big(cons.appeal_bond);
+  const tooBig = big(q.bounty) > maxBounty;
+  const isCreator = me() === String(q.creator).toLowerCase();
+  const challengeEnd = Number(q.proposed_at) + Number(q.challenge_window);
+  const appealEnd = Number(q.judged_at) + Number(q.challenge_window);
+  const acts = [];
+
+  if (S === "OPEN") {
+    if (now < Number(q.resolve_after)) acts.push(`<div class="mut">Proposals open at ${fmtTime(q.resolve_after)}.</div>`);
+    else if (isCreator) acts.push(`<div class="mut">You created this question, so you cannot propose its answer.</div>`);
+    else if (tooBig) acts.push(`<div class="mut">This bounty is above your reputation limit (${fmtGen(maxBounty)}).</div>`);
+    else acts.push(`<h2>Propose an answer</h2>${answerInput(q, "pa")}
+      <label>Evidence URLs (https, allowed domains, one per line, max ${esc(cons.max_evidence_urls)})</label><textarea id="pu"></textarea>
+      <button id="bPropose">Propose (bond ${fmtGen(proposerBond)})</button>`);
+    if (isCreator) acts.push(`<button id="bCancel" class="sec">Cancel question</button>`);
+  }
+  if (S === "UNRESOLVED_TIMEOUT") {
+    acts.push(`<div class="mut">Nobody proposed an answer before the deadline.</div>`);
+    if (isCreator) acts.push(`<button id="bCancel" class="sec">Cancel question (refund)</button>`);
+    else if (tooBig) acts.push(`<div class="mut">This bounty is above your reputation limit (${fmtGen(maxBounty)}).</div>`);
+    else acts.push(`<h2>Request a timeout judgement</h2><div class="mut">Submit evidence; validators judge it. Your bond comes back in every outcome; you earn the bounty if the verdict is not INVALID.</div>
+      <label>Evidence URLs (one per line)</label><textarea id="tu"></textarea>
+      <button id="bTimeout">Trigger timeout (bond ${fmtGen(proposerBond)})</button>`);
+  }
+  if (S === "PROPOSED") {
+    if (now < challengeEnd) {
+      acts.push(`<div class="mut">Challenge window ends ${fmtTime(challengeEnd)}.</div>`);
+      if (me() !== String(q.proposer).toLowerCase() && !isCreator) acts.push(`<h2>Dispute</h2>${answerInput(q, "da")}
+        <label>Evidence URLs (one per line)</label><textarea id="du"></textarea>
+        <button id="bDispute">Dispute (bond ${fmtGen(disputeBond)})</button>`);
+    } else acts.push(`<button id="bFinalize">Finalize</button>`);
+  }
+  if (S === "JUDGED") {
+    const mine = me();
+    const lost = q.path === "TIMEOUT" ? !isCreator
+      : (mine === String(q.proposer).toLowerCase() && q.proposer_answer !== q.first_answer) || (mine === String(q.disputer).toLowerCase() && q.dispute_answer !== q.first_answer);
+    if (now < appealEnd) {
+      acts.push(`<div class="mut">First verdict: <b>${esc(q.first_answer)}</b>. Appeal window ends ${fmtTime(appealEnd)}.</div>`);
+      if (lost) acts.push(`<button id="bAppeal">Appeal (bond ${fmtGen(appealBond)})</button>`);
+    } else acts.push(`<button id="bFinalize">Finalize</button>`);
+  }
+  if (["DISPUTED", "TIMEOUT_PENDING", "EVIDENCE_FROZEN", "APPEALED"].includes(S)) {
+    const steps = [];
+    const rj = cs ? Number(cs.rounds_judged) : 0;
+    if (!cs) steps.push(`<button class="eng" data-fn="open_case">Open case</button>`);
+    else if (cs.state === "OPEN") {
+      steps.push(`<button class="eng" data-fn="freeze_evidence">Freeze evidence</button>`);
+      const docs = (snap && snap.docs) || [];
+      docs.forEach((d, i) => { if (d.status === "PENDING") steps.push(`<button class="eng sec" data-fn="freeze_url" data-index="${i}">Freeze only ${esc(d.side)}: ${esc(short(d.url.replace(/^https:\/\//, "")))}</button>`); });
+      const graceEnd = Number(cs.opened_at) + Number(cs.freeze_grace);
+      if (now >= graceEnd) steps.push(`<div class="mut">Some evidence could not be captured consistently by the validators.</div><button class="eng sec" data-fn="release_unfrozen">Mark the rest unavailable and continue</button>`);
+      else steps.push(`<div class="mut">If a URL cannot be captured consistently, it can be marked unavailable after ${fmtTime(graceEnd)}.</div>`);
+    }
+    else if (S !== "EVIDENCE_FROZEN" && S !== "APPEALED" && rj === 0) steps.push(`<button class="eng" data-fn="publish_evidence">Publish evidence</button>`);
+    else if (S === "EVIDENCE_FROZEN" && rj === 0) steps.push(`<button class="eng" data-fn="judge">Judge (round 1)</button>`);
+    else if (S === "EVIDENCE_FROZEN" && rj >= 1) steps.push(`<button class="eng" data-fn="publish_verdict" data-round="1">Publish verdict</button>`);
+    else if (S === "APPEALED" && rj === 1 && !cs.appeal_open) steps.push(`<button class="eng" data-fn="open_appeal">Open appeal</button>`);
+    else if (S === "APPEALED" && rj === 1 && cs.appeal_open) steps.push(`<button class="eng" data-fn="judge">Judge (round 2)</button>`);
+    else if (S === "APPEALED" && rj === 2) steps.push(`<button class="eng" data-fn="publish_verdict" data-round="2">Publish final verdict</button>`);
+    acts.push(`<h2>Resolution pipeline</h2><div class="mut">Anyone can run the next step. Engine case: ${esc(cs ? cs.state : "none")}.
+      Published results reach the registry once the engine transaction is finalized, which can take a few minutes.</div>${steps.join("")}
+      ${now >= Number(q.stage_at) + Number(cons.stall_timeout) ? `<div class="mut">This stage has been stuck for ${fmtDur(cons.stall_timeout)}.</div><button id="bAbort" class="sec">Abort stalled stage</button>` : ""}`);
+  }
+
+  const caseHtml = cs ? `<div class="card"><h2>Engine case</h2>${kv([["Kind", esc(cs.kind)], ["State", esc(cs.state)], ["Snapshot hash", `<span class="mono">${esc(cs.snapshot_hash || "-")}</span>`],
+    ["Round 1", cs.answer_1 ? `<b>${esc(cs.answer_1)}</b>${cs.quote_1 ? ` — “${esc(cs.quote_1)}”` : ""}` : "-"],
+    ["Round 2", cs.answer_2 ? `<b>${esc(cs.answer_2)}</b>${cs.quote_2 ? ` — “${esc(cs.quote_2)}”` : ""}` : "-"]])}</div>` : "";
+  const docNote = (d) => d.status === "OK" ? `<pre class="mono">${esc(String(d.excerpt || "").slice(0, 4000))}</pre>`
+    : d.status === "PENDING" ? `<div class="mut">Not captured yet.</div>` : `<div class="mut">Could not be captured reliably; it supports no claim.</div>`;
+  const snapHtml = snap ? `<div class="card"><h2>Evidence snapshot</h2>${(snap.docs || []).map((d) => `<div class="mut mono">${esc(d.side)} · ${esc(d.url)} · ${esc(d.status)}</div>${docNote(d)}`).join("")}</div>` : "";
+  const answerBlock = q.final ? `<div class="card" style="border-color:var(--ok)"><h2>Final answer: ${esc(q.answer)}</h2><div class="mut">Path: ${esc(q.path)}</div></div>` : "";
+
+  const html = `<h1>${esc(q.question_text)}</h1>${answerBlock}
+  <div class="card">${tag(S)}<span class="tag">${esc(q.answer_type)}</span>
+  ${kv([["ID", esc(q.id)], ["Options", esc(JSON.stringify(q.options))], ["Bounty", fmtGen(q.bounty)], ["Creator", addr(q.creator)], ["Beneficiary", addr(q.beneficiary)],
+    ["Allowed evidence", esc(q.allowed_evidence_domains.join(", "))], ["Resolve after", fmtTime(q.resolve_after)], ["Response deadline", fmtTime(q.response_deadline)],
+    ["Challenge window", fmtDur(q.challenge_window)],
+    ["Proposer", q.proposer ? `${addr(q.proposer)} → <b>${esc(q.proposer_answer)}</b> (bond ${fmtGen(q.proposer_bond)})` : "-"],
+    ["Proposer evidence", `<span class="mono">${esc((q.proposer_urls || []).join(" "))}</span>`],
+    ["Disputer", q.disputer ? `${addr(q.disputer)} → <b>${esc(q.dispute_answer)}</b> (bond ${fmtGen(q.dispute_bond)})` : "-"],
+    ["Dispute evidence", `<span class="mono">${esc((q.dispute_urls || []).join(" "))}</span>`],
+    ["Timeout caller", q.timeout_caller ? `${addr(q.timeout_caller)} (bond ${fmtGen(q.timeout_bond)})` : "-"],
+    ["Appellant", q.appellant ? `${addr(q.appellant)} (bond ${fmtGen(q.appeal_bond)})` : "-"],
+    ["Spec hash", `<span class="mono">${esc(q.spec_hash)}</span>`]])}</div>
+  ${caseHtml}${snapHtml}
+  <div class="card">${acts.join("") || '<div class="mut">No actions available.</div>'}</div>`;
+
+  const statusIs = (...want) => async () => want.includes(String(await readJson("registry", "get_question", [qid]).then((x) => x.status)));
+  const after = (R) => {
+    on(R, "#bPropose", () => write("registry", "propose", [qid, $("#pa", R).value.trim(), urlsFrom(R, "#pu")], proposerBond, statusIs("PROPOSED")));
+    on(R, "#bDispute", () => write("registry", "dispute", [qid, $("#da", R).value.trim(), urlsFrom(R, "#du")], disputeBond, statusIs("DISPUTED")));
+    on(R, "#bTimeout", () => write("registry", "trigger_timeout", [qid, urlsFrom(R, "#tu")], proposerBond, statusIs("TIMEOUT_PENDING")));
+    on(R, "#bCancel", () => { if (!confirm("Cancel this question and refund the bounty?")) throw new Error("Not cancelled"); return write("registry", "cancel_question", [qid], 0n, statusIs("CANCELLED")); });
+    on(R, "#bFinalize", () => write("registry", "finalize", [qid], 0n, statusIs("FINAL_OPTIMISTIC", "FINAL_CONSENSUS")));
+    on(R, "#bAppeal", () => write("registry", "appeal", [qid], appealBond, statusIs("APPEALED")));
+    on(R, "#bAbort", () => write("registry", "abort_stalled", [qid], 0n, statusIs("FINAL_CONSENSUS")));
+    on(R, ".eng", (b) => {
+      const args = [qid]; if (b.dataset.round) args.push(Number(b.dataset.round)); if (b.dataset.index) args.push(Number(b.dataset.index));
+      return write("engine", b.dataset.fn, args, 0n);
+    });
+  };
+  return { html, after };
+}
+
+/* ---------------- create ---------------- */
+function typeFields(prefix, types) {
+  return `<label>Answer type</label><select id="${prefix}type">${types.map((t) => `<option>${t}</option>`).join("")}</select>
+  <label>Options (comma separated)</label><input id="${prefix}opts" class="wide" placeholder="CATEGORICAL: red,green · BUCKETED_RANGE edges: 10,20,30 · SPLIT parties: 0x…,0x…">
+  <div class="mut">Leave empty for BINARY (YES / NO).</div>`;
+}
+function optionsJson(type, raw) {
+  const items = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (type === "BINARY") return "[]";
+  if (type === "BUCKETED_RANGE") return JSON.stringify(items.map((s) => { if (!/^-?\d{1,24}$/.test(s)) throw new Error("Bucket edges must be integers"); const n = Number(s); if (!Number.isSafeInteger(n)) throw new Error("Bucket edge too large for the browser: " + s); return n; }));
+  return JSON.stringify(items.map((s) => (type === "SPLIT" ? s.toLowerCase() : s)));
+}
+const domainsJson = (v) => JSON.stringify(v.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean));
+const defTime = (secs) => { const d = new Date(Date.now() + secs * 1000); d.setSeconds(0, 0); const p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+
+async function createPage() {
+  const cons = await readJson("registry", "get_constants");
+  const minCw = Math.ceil(Number(cons.min_challenge_window) / 60);
+  const times = (p) => `<label>Allowed evidence domains (plain-text sources work best, e.g. raw.githubusercontent.com)</label><input id="${p}dom" class="wide" value="raw.githubusercontent.com">
+    <label>Resolve after</label><input id="${p}res" type="datetime-local" value="${defTime(3600)}">
+    <label>Response deadline (at least ${fmtDur(cons.min_response_window)} after "resolve after")</label><input id="${p}dl" type="datetime-local" value="${defTime(86400 * 3)}">
+    <label>Challenge window in minutes (${minCw} – ${Math.floor(Number(cons.max_challenge_window) / 60)})</label><input id="${p}cw" type="number" min="${minCw}" value="${minCw}">`;
+  const html = `<h1>Create</h1><div class="card"><label>What to create</label><select id="ckind"><option value="q">Question</option><option value="m">Prediction market</option><option value="e">Conditional escrow</option></select></div>
+  <div class="card kind" data-kind="q"><h2>New question</h2>
+    <label>Question</label><textarea id="qtext" maxlength="600"></textarea>${typeFields("q", ["BINARY", "CATEGORICAL", "BUCKETED_RANGE", "SPLIT"])}
+    ${times("q")}
+    <label>Bounty in GEN (${fmtGen(cons.min_bounty)} – ${fmtGen(cons.max_bounty)})</label><input id="qbounty" value="0.2">
+    <label>Beneficiary of refunds (optional, defaults to you)</label><input id="qben" class="wide" placeholder="0x…">
+    <div><button id="cQ">Create question</button></div></div>
+  <div class="card kind" data-kind="m"><h2>New prediction market</h2>
+    <label>Title (the question)</label><textarea id="mtitle" maxlength="300"></textarea>${typeFields("m", ["BINARY", "CATEGORICAL", "BUCKETED_RANGE"])}
+    <label>Staking closes (must be before "resolve after")</label><input id="mclose" type="datetime-local" value="${defTime(1800)}">${times("m")}
+    <label>Creator fee in % (0 – 10)</label><input id="mfee" type="number" min="0" max="10" step="0.01" value="1">
+    <label>Resolver bounty in GEN</label><input id="mbounty" value="0.2">
+    <div><button id="cM">Create market</button></div></div>
+  <div class="card kind" data-kind="e"><h2>New conditional escrow</h2>
+    <label>Condition (the question)</label><textarea id="etitle" maxlength="300"></textarea>${typeFields("e", ["BINARY", "SPLIT"])}
+    <label>Payee address</label><input id="epayee" class="wide" placeholder="0x…">${times("e")}
+    <div class="mut">You can cancel only before "resolve after". From then on only the resolved answer releases the funds.</div>
+    <label>Escrowed amount in GEN</label><input id="eamt" value="1">
+    <label>Resolver bounty in GEN</label><input id="ebounty" value="0.2">
+    <div><button id="cE">Create escrow</button></div></div>`;
+  const after = (R) => {
+    const sw = $("#ckind", R);
+    const show = () => R.querySelectorAll(".kind").forEach((e) => (e.style.display = e.dataset.kind === sw.value ? "" : "none"));
+    sw.addEventListener("change", show); show();
+    const common = (p) => ({
+      domains: domainsJson($("#" + p + "dom", R).value),
+      resolve: epoch($("#" + p + "res", R).value),
+      deadline: epoch($("#" + p + "dl", R).value),
+      cw: Math.round(Number($("#" + p + "cw", R).value) * 60),
+    });
+    const precheck = async (creator, text, type, opts, c, ben, bounty) => {
+      const err = await read("registry", "check_question", [creator, text, type, opts, c.domains, c.resolve, c.deadline, c.cw, ben, "", bounty]);
+      if (err) throw new Error("The registry would reject this: " + err);
+    };
+    on(R, "#cQ", async () => {
+      const c = common("q"); const type = $("#qtype", R).value; const text = $("#qtext", R).value.trim();
+      const opts = optionsJson(type, $("#qopts", R).value); const bounty = parseGen($("#qbounty", R).value);
+      const ben = $("#qben", R).value.trim().toLowerCase();
+      if (ben && !ADDR.test(ben)) throw new Error("Beneficiary must be a 0x address");
+      await precheck(me(), text, type, opts, c, ben, bounty);
+      const ref = "ui" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+      let id = "";
+      await write("registry", "create_question", [text, type, opts, c.domains, c.resolve, c.deadline, c.cw, ben, ref], bounty,
+        async () => { id = await read("registry", "get_question_id_by_ref", [me(), ref]); return !!id; });
+      location.hash = "#/question/" + encodeURIComponent(id);
+    }, null);
+    on(R, "#cM", async () => {
+      const c = common("m"); const type = $("#mtype", R).value; const title = $("#mtitle", R).value.trim();
+      const opts = optionsJson(type, $("#mopts", R).value); const bounty = parseGen($("#mbounty", R).value);
+      const close = epoch($("#mclose", R).value);
+      if (close >= c.resolve) throw new Error("Staking must close before \"resolve after\"");
+      await precheck(cfg.pool, title, type, opts, c, me(), bounty);
+      const before = new Set((await readJson("pool", "list_markets")).map((m) => m.id));
+      let mine = null;
+      await write("pool", "create_market", [title, type, opts, c.domains, close, c.resolve, c.deadline, c.cw, Math.round(Number($("#mfee", R).value) * 100)], bounty,
+        async () => { mine = (await readJson("pool", "list_markets")).find((m) => !before.has(m.id) && m.creator === me() && m.title === title); return !!mine; });
+      location.hash = "#/market/" + encodeURIComponent(mine.id);
+    }, null);
+    on(R, "#cE", async () => {
+      const c = common("e"); const type = $("#etype", R).value; const title = $("#etitle", R).value.trim();
+      const opts = optionsJson(type, $("#eopts", R).value);
+      const payee = $("#epayee", R).value.trim().toLowerCase();
+      if (!ADDR.test(payee)) throw new Error("Payee must be a 0x address");
+      const amount = parseGen($("#eamt", R).value), bounty = parseGen($("#ebounty", R).value);
+      await precheck(cfg.escrow, title, type, opts, c, me(), bounty);
+      const before = new Set((await readJson("escrow", "list_escrows")).map((e) => e.id));
+      let mine = null;
+      await write("escrow", "create_escrow", [title, type, opts, payee, c.domains, c.resolve, c.deadline, c.cw, amount], amount + bounty,
+        async () => { mine = (await readJson("escrow", "list_escrows")).find((e) => !before.has(e.id) && e.payer === me() && e.title === title); return !!mine; });
+      location.hash = "#/escrow/" + encodeURIComponent(mine.id);
+    }, null);
+  };
+  return { html, after };
+}
+
+/* ---------------- markets ---------------- */
+async function marketsPage() {
+  const list = await readJson("pool", "list_markets");
+  return { html: `<h1>Markets</h1>${list.length ? list.map((m) => `<a class="card item" href="#/market/${encodeURIComponent(m.id)}">
+    <div class="row"><b class="grow">${esc(m.title)}</b>${tag(m.state)}</div>
+    <div class="mut">${esc(m.id)} · ${esc(m.answer_type)} · pool ${fmtGen(m.total)} · closes ${fmtTime(m.close_time)}</div></a>`).join("") : '<div class="card mut">No markets yet.</div>'}` };
+}
+async function marketPage(mid) {
+  const m = await readJson("pool", "get_market", [mid]);
+  const pos = (await readJson("pool", "get_positions", [me()])).filter((p) => p.market === mid);
+  const bal = big(await read("pool", "get_claimable", [me()]));
+  const cfgp = await readJson("pool", "get_config");
+  let res = null;
+  if (m.question_id) res = String(await read("registry", "get_resolution", [m.question_id])).split("|");
+  const now = nowSec();
+  const open = m.state === "OPEN";
+  const acts = [];
+  if (open && !m.question_id) acts.push(`<div class="mut">The resolution question has not been created (yet). If it never appears, anyone can refund the market one hour after creation.</div><button id="bRecover" class="sec">Recover failed market</button>`);
+  if (open && m.question_id && now < Number(m.close_time)) acts.push(`<h2>Stake</h2><div class="row"><select id="so">${m.outcomes.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}</select><input id="sa" value="0.1" class="grow"><button id="bStake">Stake</button></div><div class="mut">Minimum ${fmtGen(cfgp.min_stake)}.</div>`);
+  if (open && m.question_id && now >= Number(m.close_time)) acts.push(`<div class="mut">Staking is closed. Settle once the question is final.</div><button id="bSettle">Settle from resolution</button>`);
+  if (!open && pos.some((p) => !p.claimed)) acts.push(`<button id="bClaim">Claim winnings / refund</button>`);
+  const html = `<h1>${esc(m.title)}</h1><div class="card">${tag(m.state)}<span class="tag">${esc(m.answer_type)}</span>${kv([
+    ["Market", esc(m.id)], ["Creator", addr(m.creator)], ["Staking closes", fmtTime(m.close_time)], ["Fee", (Number(m.fee_bps) / 100) + " %"], ["Resolver bounty", fmtGen(m.bounty)],
+    ["Total staked", fmtGen(m.total)], ["Winning outcome", esc(m.winning || "-")], ["Reason", esc(m.reason || "-")],
+    ["Question", m.question_id ? `${qlink(m.question_id)} (${esc(res ? res[0] : "?")})` : "not created"]])}</div>
+  <div class="card"><h2>Pools</h2><table>${m.outcomes.map((o) => `<tr><td>${esc(o)}</td><td>${fmtGen(m.pools[o])}</td></tr>`).join("")}</table></div>
+  <div class="card"><h2>Your positions</h2>${pos.length ? pos.map((p) => `<div>${esc(p.outcome)}: ${fmtGen(p.amount)}${p.claimed ? " (claimed)" : ""}</div>`).join("") : '<div class="mut">None.</div>'}</div>
+  <div class="card">${acts.join("") || '<div class="mut">No actions available.</div>'}</div>
+  <div class="card"><h2>Your balance in this pool</h2><div>${fmtGen(bal)}</div>${bal > 0n ? '<button id="bPW" class="sec">Withdraw</button>' : ""}</div>`;
+  const stateIs = (...want) => async () => want.includes((await readJson("pool", "get_market", [mid])).state);
+  const after = (R) => {
+    on(R, "#bStake", () => {
+      const amt = parseGen($("#sa", R).value); const o = $("#so", R).value;
+      const before = pos.filter((p) => p.outcome === o).reduce((a, p) => a + big(p.amount), 0n);
+      return write("pool", "stake", [mid, o], amt, async () => (await readJson("pool", "get_positions", [me()])).filter((p) => p.market === mid && p.outcome === o).reduce((a, p) => a + big(p.amount), 0n) > before);
+    });
+    on(R, "#bSettle", () => write("pool", "settle", [mid], 0n, stateIs("SETTLED", "REFUNDED")));
+    on(R, "#bRecover", () => write("pool", "recover_failed_market", [mid], 0n, stateIs("REFUNDED")));
+    on(R, "#bClaim", () => write("pool", "claim", [mid], 0n, async () => big(await read("pool", "get_claimable", [me()])) > bal));
+    on(R, "#bPW", () => write("pool", "withdraw", [], 0n, async () => big(await read("pool", "get_claimable", [me()])) === 0n));
+  };
+  return { html, after };
+}
+
+/* ---------------- escrows ---------------- */
+async function escrowsPage() {
+  const list = await readJson("escrow", "list_escrows");
+  return { html: `<h1>Escrows</h1>${list.length ? list.map((e) => `<a class="card item" href="#/escrow/${encodeURIComponent(e.id)}">
+    <div class="row"><b class="grow">${esc(e.title)}</b>${tag(e.state)}</div>
+    <div class="mut">${esc(e.id)} · ${esc(e.answer_type)} · ${fmtGen(e.amount)} → ${esc(short(e.payee))}</div></a>`).join("") : '<div class="card mut">No escrows yet.</div>'}` };
+}
+async function escrowPage(eid) {
+  const e = await readJson("escrow", "get_escrow", [eid]);
+  const cfge = await readJson("escrow", "get_config");
+  const bal = big(await read("escrow", "get_claimable", [me()]));
+  let res = null;
+  if (e.question_id) res = String(await read("registry", "get_resolution", [e.question_id])).split("|");
+  const now = nowSec();
+  const isPayer = me() === String(e.payer).toLowerCase();
+  const acts = [];
+  if (e.state === "OPEN") {
+    if (!e.question_id) acts.push(`<div class="mut">The resolution question has not been created (yet). One hour after creation anyone can refund the payer.</div><button id="bRecover" class="sec">Recover failed escrow</button>`);
+    else {
+      acts.push(`<button id="bSettle">Settle from resolution</button>`);
+      if (Number(e.invalid_seen_at) > 0) acts.push(`<div class="mut">The answer was INVALID. The payer can be refunded after ${fmtTime(Number(e.invalid_seen_at) + Number(cfge.invalid_grace))} by settling again.</div>`);
+      if (isPayer && now < Number(e.resolve_after) && res && (res[0] === "OPEN")) acts.push(`<button id="bCancel" class="sec">Cancel escrow (until ${fmtTime(e.resolve_after)})</button>`);
+    }
+  }
+  const html = `<h1>${esc(e.title)}</h1><div class="card">${tag(e.state)}<span class="tag">${esc(e.answer_type)}</span>${kv([
+    ["Escrow", esc(e.id)], ["Payer", addr(e.payer)], ["Payee", addr(e.payee)], ["Parties", `<span class="mono">${esc((e.parties || []).join(", ") || "-")}</span>`],
+    ["Amount", fmtGen(e.amount)], ["Resolver bounty", fmtGen(e.bounty)], ["Resolve after", fmtTime(e.resolve_after)], ["Outcome", esc(e.outcome || "-")],
+    ["Question", e.question_id ? `${qlink(e.question_id)} (${esc(res ? res[0] : "?")})` : "not created"]])}</div>
+  <div class="card">${acts.join("") || '<div class="mut">This escrow is closed.</div>'}</div>
+  <div class="card"><h2>Your balance in this escrow contract</h2><div>${fmtGen(bal)}</div>${bal > 0n ? '<button id="bW" class="sec">Withdraw</button>' : ""}</div>`;
+  const after = (R) => {
+    const changed = async () => { const x = await readJson("escrow", "get_escrow", [eid]); return x.state !== e.state || Number(x.invalid_seen_at) !== Number(e.invalid_seen_at); };
+    on(R, "#bCancel", () => { if (!confirm("Cancel the escrow and refund yourself?")) throw new Error("Not cancelled"); return write("escrow", "cancel_escrow", [eid], 0n, changed); });
+    on(R, "#bSettle", () => write("escrow", "settle", [eid], 0n, changed));
+    on(R, "#bRecover", () => write("escrow", "recover_failed_escrow", [eid], 0n, changed));
+    on(R, "#bW", () => write("escrow", "withdraw", [], 0n, async () => big(await read("escrow", "get_claimable", [me()])) === 0n));
+  };
+  return { html, after };
+}
+
+/* ---------------- resolvers & bank ---------------- */
+async function resolversPage() {
+  const list = await readJson("bank", "list_resolvers");
+  const mine = await readJson("bank", "get_resolver", [me()]);
+  return { html: `<h1>Resolvers</h1><div class="card"><h2>You</h2>${kv([["Reputation", esc(mine.reputation)], ["Wins", esc(mine.wins)], ["Slashes", esc(mine.slashes)],
+    ["Bond multiplier", esc(mine.bond_multiplier_pct) + " %"], ["Max bounty you can resolve", fmtGen(mine.max_bounty)]])}</div>
+  <div class="card"><table><tr><th>#</th><th>Address</th><th>Rep</th><th>W</th><th>S</th></tr>${list.map((r, i) => `<tr><td>${i + 1}</td><td class="mono">${esc(r.address)}</td><td>${esc(r.reputation)}</td><td>${esc(r.wins)}</td><td>${esc(r.slashes)}</td></tr>`).join("") || '<tr><td colspan="5" class="mut">No resolvers yet.</td></tr>'}</table></div>` };
+}
+async function bankPage() {
+  const [acc, bal, wiring] = await Promise.all([readJson("bank", "get_accounting"), read("bank", "get_claimable", [me()]), readJson("bank", "get_wiring")]);
+  const html = `<h1>Bank</h1><div class="card"><h2>Your claimable balance</h2><div style="font-size:20px">${fmtGen(bal)}</div>
+    <div class="mut">Bounties, returned bonds, rewards and refunds of rejected calls land here.</div>
+    <button id="bW" ${big(bal) === 0n ? "disabled" : ""}>Withdraw</button></div>
+  <div class="card"><h2>Accounting</h2>${kv([["Balance", fmtGen(acc.balance)], ["Claimable total", fmtGen(acc.claimable_total)], ["Locked total", fmtGen(acc.locked_total)], ["Invariant", acc.ok ? '<span class="tag s-final">balance = claimable + locked</span>' : '<span class="tag s-bad">VIOLATED</span>']])}</div>
+  <div class="card"><h2>Wiring</h2>${kv(Object.entries(wiring).map(([k, v]) => [k, `<span class="mono">${esc(v)}</span>`]))}</div>`;
+  const after = (R) => on(R, "#bW", () => write("bank", "withdraw", [], 0n, async () => big(await read("bank", "get_claimable", [me()])) === 0n));
+  return { html, after };
+}
+
+/* ---------------- settings ---------------- */
+function settingsPage() {
+  const html = `<h1>Settings</h1><div class="card"><h2>Contract addresses</h2>${KEYS.map((k) => `<label>${k}</label><input id="c_${k}" class="wide mono" value="${esc(cfg[k])}" placeholder="0x…">`).join("")}
+  <div><button id="sSave">Save</button></div></div>
+  <div class="card"><h2>Account</h2><div class="mono">${esc(account.address)}</div>
+  <div class="mut">The key lives only in this browser. Back it up before you fund it from the Studio faucet.</div>
+  <div><button id="sShow" class="sec">Reveal private key</button><button id="sNew" class="sec">New account</button></div>
+  <div id="skv" class="mono"></div>
+  <label>Import private key</label><div class="row"><input id="sk" class="grow mono" autocomplete="off"><button id="sImp">Import</button></div></div>`;
+  const after = (R) => {
+    on(R, "#sSave", async () => {
+      const next = {};
+      for (const k of KEYS) { const v = $("#c_" + k, R).value.trim().toLowerCase(); if (v && !ADDR.test(v)) throw new Error(k + " is not a 0x address"); next[k] = v; }
+      Object.assign(cfg, next); saveCfg(); toast("Saved", "good");
+    });
+    on(R, "#sNew", async () => {
+      if (!confirm("Create a new account? Keep a copy of the current private key first: balances belong to that key.")) throw new Error("Kept the current account");
+      setKey(generatePrivateKey()); toast("New account created. Previous keys are kept in this browser's history.", "good");
+    });
+    on(R, "#sImp", async () => { const v = $("#sk", R).value.trim(); if (!/^0x[0-9a-fA-F]{64}$/.test(v)) throw new Error("Private key must be 0x + 64 hex characters"); setKey(v); toast("Imported", "good"); });
+    on(R, "#sShow", async () => { $("#skv", R).textContent = pk; }, null);
+  };
+  return { html, after };
+}
+
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>
