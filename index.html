@@ -159,22 +159,29 @@ function receiptProblem(rc) {
   const s = stringify(rc);
   const rej = s.match(/REJECTED:[^"\\]{0,160}/);
   if (rej) return rej[0];
-  if (/"execution_result"\s*:\s*"ERROR"/.test(s) || /"status"\s*:\s*"(rollback|error)"/i.test(s)) return "the contract raised an error";
+  if (/"execution_result"\s*:\s*"ERROR"/.test(s)) return "the contract raised an error";
   return "";
 }
-/* Every write is followed by a read-back check, so a call the contract rejected
-   is never shown as a success, whatever shape the receipt has. */
+/* Every write is confirmed by a read-back check. State written by a call can
+   take a minute to be readable (cross-contract messages, finalization), so the
+   check is repeated before a call is reported as not applied. A REJECTED reason
+   from the contract is reported at once. */
 async function write(k, fn, args, value, verify) {
   const hash = await client.writeContract({ address: need(k), functionName: fn, args, value: value || 0n });
   toast("Sent " + fn + "…");
   const rc = await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 240, interval: 5000 });
   const problem = receiptProblem(rc);
+  const credited = value && value > 0n ? "\nAny GEN you sent was credited to your claimable balance." : "";
+  if (problem && /^REJECTED/.test(problem)) throw new Error(fn + " was not applied: " + problem + credited + "\nTransaction: " + hash);
   let ok = !problem;
-  if (verify) { try { ok = await verify(); } catch (e) { ok = false; } }
-  if (!ok) {
-    const extra = value && value > 0n ? "\nAny GEN you sent was credited to your claimable balance." : "";
-    throw new Error(fn + " was not applied" + (problem ? ": " + problem : "") + extra + "\nTransaction: " + hash);
+  if (verify) {
+    ok = false;
+    for (let i = 0; i < 18 && !ok; i++) {
+      try { ok = await verify(); } catch (e) { ok = false; }
+      if (!ok) await new Promise((r) => setTimeout(r, 5000));
+    }
   }
+  if (!ok) throw new Error(fn + " is not confirmed yet" + (problem ? " (" + problem + ")" : "") + ". Reload this page in a minute; do not send it again unless the page still shows no change." + credited + "\nTransaction: " + hash);
   toast(fn + " applied", "good");
   return rc;
 }

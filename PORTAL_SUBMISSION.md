@@ -23,6 +23,13 @@ Engineering highlights:
   random message order), 51/51 mutants killed, three independent audit rounds, browser end-to-end
   test, CI, and a single-file frontend.
 
+**Live test on GenLayer Studio (real network, five contracts deployed from deploy/demo/)**
+- Optimistic path: question created, answer proposed with a bond, challenge window passed, finalized, bounty and bond withdrawn; the bank invariant held after every step.
+- Dispute path: a second account disputed the proposed answer (NO) with its own bond; the engine opened the case, froze both evidence documents (identical text agreed by all validators), published the evidence to the registry, and the LLM judge answered YES quoting the frozen evidence ("# OpenResolver"). After the appeal window the case finalized as CONSENSUS; the disputer received its bond, the bounty and 80% of the proposer's bond.
+- PredictionPool: market created (its resolution question was created automatically through the registry), two accounts staked on opposite outcomes, the question finalized, the market settled with the right winner, the winner claimed the pool and the creator fee, and the pool balance returned to zero.
+- ConditionalEscrow: escrow created with a resolution question, the answer YES released the escrowed amount to the payee, who withdrew it. A create call made less than five minutes before "resolve after" was rejected by the contract and the GEN was credited back, as designed.
+- Accounting stayed exact on every contract; the withdraw transfer is asynchronous, so the bank invariant can show a short settling period after a withdraw.
+
 **Tags**
 oracle, dispute-resolution, prediction-market, escrow, optimistic, consensus, evidence, infrastructure
 
